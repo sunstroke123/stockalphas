@@ -1,0 +1,97 @@
+/* stylelint-disable unknownAtRules */
+@import "tailwindcss";
+
+:root {
+  /* Green/Black Theme Colors */
+  --background: #0A0A0A;
+  --foreground: rgb(230, 230, 230);
+  --card-background: rgb(25, 25, 25);
+  --primary-green: #0AFA92;
+  --secondary-red: #FF453A;
+  --text-gray: rgb(140, 140, 140);
+  --border-color: rgb(40, 40, 40);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card-background);
+  --color-primary: var(--primary-green);
+  --color-danger: var(--secondary-red);
+  --color-muted: var(--text-gray);
+  --color-border: var(--border-color);
+  --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
+  --font-heading: var(--font-poppins), system-ui, -apple-system, sans-serif;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Apply Poppins to all headings */
+h1, h2, h3, h4, h5, h6,
+.font-heading {
+  font-family: var(--font-poppins), system-ui, -apple-system, sans-serif;
+}
+
+/* Apply Inter to body text */
+p, span, a, button, input, textarea, select, label,
+.font-body {
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+}
+
+/* Custom Dark Green Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(10, 250, 146, 0.3) 0%, rgba(10, 250, 146, 0.15) 100%);
+  border-radius: 10px;
+  border: 2px solid var(--background);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(10, 250, 146, 0.5) 0%, rgba(10, 250, 146, 0.3) 100%);
+  border: 2px solid var(--background);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--primary-green);
+}
+
+/* Firefox Scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(10, 250, 146, 0.3) var(--background);
+}
+
+/* Animations */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.skeleton {
+  animation: shimmer 2s infinite linear;
+  background: linear-gradient(
+    to right,
+    var(--card-background) 4%,
+    rgb(35, 35, 35) 25%,
+    var(--card-background) 36%
+  );
+  background-size: 1000px 100%;
+}

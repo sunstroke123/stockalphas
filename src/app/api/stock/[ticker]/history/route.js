@@ -11,6 +11,8 @@ export async function OPTIONS(req) {
   });
 }
 
+import { getFinnhubQuote } from "@/lib/finnhub";
+
 export async function GET(req, ctx) {
   try {
     // Next.js 16: params is a Promise
@@ -18,57 +20,66 @@ export async function GET(req, ctx) {
 
     console.log("Fetching history:", ticker);
 
-    // ✔ Correct import for yahoo-finance2 v3+
-    const yahooModule = await import("yahoo-finance2");
-    const YahooFinance = yahooModule.default;
-    
-    // ✔ Create an instance before using .historical()
-    const yahooFinance = new YahooFinance();
-
-    const { searchParams } = new URL(req.url);
-    const period = searchParams.get("period") || "1mo";
-
-    // Map period to Yahoo Finance intervals
-    const periodMap = {
-      "1w": {
-        period1: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-        interval: "1d",
-      },
-      "1mo": {
-        period1: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-        interval: "1d",
-      },
-      "3mo": {
-        period1: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
-        interval: "1d",
-      },
-      "1y": {
-        period1: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000),
-        interval: "1d",
-      },
-      "5y": {
-        period1: new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000),
-        interval: "1wk",
-      },
-    };
-
-    const config = periodMap[period] || periodMap["1mo"];
-
-    const result = await yahooFinance.historical(ticker.toUpperCase(), {
-      period1: config.period1,
-      period2: new Date(),
-      interval: config.interval,
-    });
-
-    const data = result.map((item) => ({
-      date: item.date.toISOString().split("T")[0],
-      open: parseFloat(item.open.toFixed(2)),
-      high: parseFloat(item.high.toFixed(2)),
-      low: parseFloat(item.low.toFixed(2)),
-      close: parseFloat(item.close.toFixed(2)),
-      volume: item.volume,
-    }));
-
+    let data = [];
+    let period = "1mo";
+    try {
+      const yahooModule = await import("yahoo-finance2");
+      const YahooFinance = yahooModule.default;
+      const yahooFinance = new YahooFinance();
+      const { searchParams } = new URL(req.url);
+      period = searchParams.get("period") || "1mo";
+      const periodMap = {
+        "1w": {
+          period1: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+          interval: "1d",
+        },
+        "1mo": {
+          period1: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+          interval: "1d",
+        },
+        "3mo": {
+          period1: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+          interval: "1d",
+        },
+        "1y": {
+          period1: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000),
+          interval: "1d",
+        },
+        "5y": {
+          period1: new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000),
+          interval: "1wk",
+        },
+      };
+      const config = periodMap[period] || periodMap["1mo"];
+      const result = await yahooFinance.historical(ticker.toUpperCase(), {
+        period1: config.period1,
+        period2: new Date(),
+        interval: config.interval,
+      });
+      data = result.map((item) => ({
+        date: item.date.toISOString().split("T")[0],
+        open: parseFloat(item.open.toFixed(2)),
+        high: parseFloat(item.high.toFixed(2)),
+        low: parseFloat(item.low.toFixed(2)),
+        close: parseFloat(item.close.toFixed(2)),
+        volume: item.volume,
+      }));
+    } catch (yahooErr) {
+      // Fallback to Finnhub (current price only)
+      try {
+        const finnhubQuote = await getFinnhubQuote(ticker.toUpperCase());
+        data = [{
+          date: new Date().toISOString().split("T")[0],
+          open: finnhubQuote.o,
+          high: finnhubQuote.h,
+          low: finnhubQuote.l,
+          close: finnhubQuote.c,
+          volume: finnhubQuote.v,
+        }];
+      } catch (finnhubErr) {
+        throw new Error("Failed to fetch stock history from Yahoo and Finnhub");
+      }
+    }
     return NextResponse.json({
       ticker: ticker.toUpperCase(),
       period,

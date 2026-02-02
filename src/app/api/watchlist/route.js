@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongodb';
 import Watchlist from '@/lib/models/Watchlist';
 import { auth } from '@/lib/auth';
+import { getFinnhubQuote } from '@/lib/finnhub';
 
 // OPTIONS handler for CORS
 export async function OPTIONS() {
@@ -43,22 +44,18 @@ export async function GET(req) {
 
     console.log('Watchlist items from database:', watchlistDoc.items.map(item => ({ id: item._id, ticker: item.ticker })));
 
-    // Fetch live prices for all stocks
+    // Fetch live prices for all stocks (Yahoo fallback to Finnhub)
     const yahooModule = await import('yahoo-finance2');
     const YahooFinance = yahooModule.default;
     const yahooFinance = new YahooFinance({ validation: { logErrors: false } });
-    
     const watchlistWithPrices = await Promise.all(
       watchlistDoc.items.map(async (item) => {
-        // Skip if ticker is undefined or invalid
         if (!item.ticker || typeof item.ticker !== 'string') {
           console.warn('Skipping invalid watchlist item:', item);
           return null;
         }
-
         try {
           const stockData = await yahooFinance.quote(item.ticker.toUpperCase());
-
           return {
             _id: item._id,
             ticker: item.ticker.toUpperCase(),
@@ -69,16 +66,30 @@ export async function GET(req) {
             addedAt: item.addedAt,
           };
         } catch (error) {
-          console.error(`Error fetching price for ${item.ticker}:`, error.message);
-          return {
-            _id: item._id,
-            ticker: item.ticker.toUpperCase(),
-            name: item.ticker,
-            price: 0,
-            change: 0,
-            changePercent: 0,
-            addedAt: item.addedAt,
-          };
+          // Fallback to Finnhub
+          try {
+            const finnhubQuote = await getFinnhubQuote(item.ticker.toUpperCase());
+            return {
+              _id: item._id,
+              ticker: item.ticker.toUpperCase(),
+              name: item.ticker,
+              price: finnhubQuote.c || 0,
+              change: finnhubQuote.d || 0,
+              changePercent: finnhubQuote.dp || 0,
+              addedAt: item.addedAt,
+            };
+          } catch (finnhubErr) {
+            console.error(`Error fetching price for ${item.ticker}:`, finnhubErr.message);
+            return {
+              _id: item._id,
+              ticker: item.ticker.toUpperCase(),
+              name: item.ticker,
+              price: 0,
+              change: 0,
+              changePercent: 0,
+              addedAt: item.addedAt,
+            };
+          }
         }
       })
     );
@@ -135,43 +146,34 @@ export async function POST(req) {
 
     const cleanTicker = ticker.trim().toUpperCase();
 
-    // Validate ticker with Yahoo Finance
+    // Validate ticker with Yahoo, fallback to Finnhub
     console.log("Validating ticker:", cleanTicker);
-    const yahooModule = await import('yahoo-finance2');
-    const YahooFinance = yahooModule.default;
-    const yahooFinance = new YahooFinance({ validation: { logErrors: false } });
-    
+    let validTicker = false;
     try {
+      const yahooModule = await import('yahoo-finance2');
+      const YahooFinance = yahooModule.default;
+      const yahooFinance = new YahooFinance({ validation: { logErrors: false } });
       const stockData = await yahooFinance.quote(cleanTicker);
-
-      if (!stockData) {
-        console.log("Invalid ticker - no data returned:", ticker);
-        return NextResponse.json(
-          { error: "Invalid ticker symbol" },
-          { status: 400 }
-        );
+      if (stockData) {
+        const hasValidPrice = stockData.regularMarketPrice || stockData.price || stockData.previousClose || stockData.ask || stockData.bid;
+        if (hasValidPrice) validTicker = true;
       }
-
-      // Check for price data (some stocks might not have regularMarketPrice but could have other price fields)
-      const hasValidPrice = stockData.regularMarketPrice || 
-                           stockData.price || 
-                           stockData.previousClose || 
-                           stockData.ask || 
-                           stockData.bid;
-
-      if (!hasValidPrice) {
-        console.log("Invalid ticker - no price data:", ticker);
-        return NextResponse.json(
-          { error: "Invalid ticker symbol - no price data available" },
-          { status: 400 }
-        );
-      }
-
-      console.log("Ticker validated successfully:", ticker);
     } catch (error) {
-      console.error("Watchlist POST: Ticker validation error", ticker, error.message);
-      // Don't block adding to watchlist if validation fails - just log the error
-      console.log("Proceeding to add ticker despite validation error");
+      // Fallback to Finnhub
+      try {
+        const finnhubQuote = await getFinnhubQuote(cleanTicker);
+        if (finnhubQuote && typeof finnhubQuote.c === 'number' && finnhubQuote.c > 0) {
+          validTicker = true;
+        }
+      } catch (finnhubErr) {
+        // ignore, will handle below
+      }
+    }
+    if (!validTicker) {
+      return NextResponse.json(
+        { error: "Invalid ticker symbol" },
+        { status: 400 }
+      );
     }
 
     await dbConnect();

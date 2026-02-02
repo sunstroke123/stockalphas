@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import dbConnect from '@/lib/mongodb';
 import Portfolio from '@/lib/models/Portfolio';
+import { getFinnhubQuote } from '@/lib/finnhub';
 
 export async function OPTIONS(req) {
   return new NextResponse(null, {
@@ -87,7 +88,7 @@ export async function GET(req) {
       });
     }
 
-    // Fetch real-time prices from Yahoo Finance
+    // Fetch real-time prices from Yahoo Finance, fallback to Finnhub
     const tickers = activeHoldings.map(h => h.ticker);
     const quotes = await Promise.all(
       tickers.map(async (ticker) => {
@@ -99,8 +100,18 @@ export async function GET(req) {
             currentPrice: stockData.regularMarketPrice || 0,
           };
         } catch (error) {
-          console.error(`Error fetching quote for ${ticker}:`, error);
-          return { ticker, name: ticker, currentPrice: 0 };
+          // Fallback to Finnhub
+          try {
+            const finnhubQuote = await getFinnhubQuote(ticker);
+            return {
+              ticker,
+              name: ticker,
+              currentPrice: finnhubQuote.c || 0,
+            };
+          } catch (finnhubErr) {
+            console.error(`Error fetching quote for ${ticker}:`, finnhubErr);
+            return { ticker, name: ticker, currentPrice: 0 };
+          }
         }
       })
     );

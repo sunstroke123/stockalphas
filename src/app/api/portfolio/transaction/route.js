@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import dbConnect from '@/lib/mongodb';
 import Portfolio from '@/lib/models/Portfolio';
+import { getFinnhubQuote } from '@/lib/finnhub';
 
 export async function OPTIONS(req) {
   return new NextResponse(null, {
@@ -57,10 +58,23 @@ export async function POST(req) {
       );
     }
 
-    // Verify ticker exists
+    // Verify ticker exists (Yahoo, fallback to Finnhub)
+    let validTicker = false;
     try {
       await yahooFinance.quote(ticker.toUpperCase());
+      validTicker = true;
     } catch (error) {
+      // Try Finnhub as fallback
+      try {
+        const finnhubQuote = await getFinnhubQuote(ticker.toUpperCase());
+        if (finnhubQuote && typeof finnhubQuote.c === 'number' && finnhubQuote.c > 0) {
+          validTicker = true;
+        }
+      } catch (finnhubErr) {
+        // ignore, will handle below
+      }
+    }
+    if (!validTicker) {
       return NextResponse.json(
         { error: 'Invalid ticker symbol' },
         { status: 400 }

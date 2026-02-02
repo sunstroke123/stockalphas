@@ -49,6 +49,8 @@ export async function OPTIONS(req) {
   });
 }
 
+import { getFinnhubQuote } from "@/lib/finnhub";
+
 export async function GET(req, ctx) {
   try {
     // Next.js 16: params is a Promise
@@ -56,22 +58,31 @@ export async function GET(req, ctx) {
 
     console.log("Fetching indicators:", ticker);
 
-    // ✔ Correct import for yahoo-finance2 v3+
-    const yahooModule = await import("yahoo-finance2");
-    const YahooFinance = yahooModule.default;
-    
-    // ✔ Create an instance before using .historical()
-    const yahooFinance = new YahooFinance();
-
-    // Fetch 200 days of historical data
-    const result = await yahooFinance.historical(ticker.toUpperCase(), {
-      period1: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000),
-      period2: new Date(),
-      interval: "1d",
-    });
-
-    const closePrices = result.map((item) => item.close);
-    const currentPrice = closePrices[closePrices.length - 1];
+    let closePrices = [];
+    let currentPrice = null;
+    // Try Yahoo first, fallback to Finnhub
+    try {
+      const yahooModule = await import("yahoo-finance2");
+      const YahooFinance = yahooModule.default;
+      const yahooFinance = new YahooFinance();
+      const result = await yahooFinance.historical(ticker.toUpperCase(), {
+        period1: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000),
+        period2: new Date(),
+        interval: "1d",
+      });
+      closePrices = result.map((item) => item.close);
+      currentPrice = closePrices[closePrices.length - 1];
+    } catch (yahooErr) {
+      // Fallback to Finnhub (last 200 closes)
+      try {
+        const finnhubQuote = await getFinnhubQuote(ticker.toUpperCase());
+        // Finnhub does not provide historical in this function, so just use current price
+        currentPrice = finnhubQuote.c;
+        closePrices = [finnhubQuote.c];
+      } catch (finnhubErr) {
+        throw new Error("Failed to fetch historical prices from Yahoo and Finnhub");
+      }
+    }
 
     // Indicators
     const sma20 = calculateSMA(closePrices, 20);

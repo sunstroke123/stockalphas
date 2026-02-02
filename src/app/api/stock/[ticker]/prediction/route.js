@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { analyzeStock, getPredictions, getChartUrl } from "@/lib/mlApi";
+import { getFinnhubQuote } from "@/lib/finnhub";
 
 export async function OPTIONS(req) {
   return new NextResponse(null, {
@@ -21,16 +22,23 @@ export async function GET(req, ctx) {
     const { searchParams } = new URL(req.url);
     const useML = searchParams.get("ml") !== "false";
 
-    // ✔ Correct import for yahoo-finance2 v3+
-    const yahooModule = await import("yahoo-finance2");
-    const YahooFinance = yahooModule.default;
-    
-    // ✔ Create an instance before using .quote()
-    const yahooFinance = new YahooFinance();
-
-    // Fetch current quote
-    const stockData = await yahooFinance.quote(ticker.toUpperCase());
-    const currentPrice = stockData.regularMarketPrice;
+    // Try Yahoo first, fallback to Finnhub
+    let currentPrice = null;
+    try {
+      const yahooModule = await import("yahoo-finance2");
+      const YahooFinance = yahooModule.default;
+      const yahooFinance = new YahooFinance();
+      const stockData = await yahooFinance.quote(ticker.toUpperCase());
+      currentPrice = stockData.regularMarketPrice;
+    } catch (yahooErr) {
+      // Fallback to Finnhub
+      try {
+        const finnhubQuote = await getFinnhubQuote(ticker.toUpperCase());
+        currentPrice = finnhubQuote.c;
+      } catch (finnhubErr) {
+        throw new Error("Failed to fetch current price from Yahoo and Finnhub");
+      }
+    }
 
     let mlPrediction = null;
     let mlError = null;
@@ -69,83 +77,79 @@ export async function GET(req, ctx) {
     let technicalPrediction = null;
 
     if (!mlPrediction || mlError) {
-      const history = await yahooFinance.historical(ticker.toUpperCase(), {
-        period1: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
-        period2: new Date(),
-        interval: "1d",
-      });
-
-      const closePrices = history.map((h) => h.close);
-      const volumes = history.map((h) => h.volume);
-
-      const n = Math.min(closePrices.length, 20);
+      let closePrices = [];
+      let volumes = [];
+      let n = 0;
+      // Try Yahoo for historical, fallback to Finnhub (current only)
+      try {
+        const yahooModule = await import("yahoo-finance2");
+        const YahooFinance = yahooModule.default;
+        const yahooFinance = new YahooFinance();
+        const history = await yahooFinance.historical(ticker.toUpperCase(), {
+          period1: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+          period2: new Date(),
+          interval: "1d",
+        });
+        closePrices = history.map((h) => h.close);
+        volumes = history.map((h) => h.volume);
+        n = Math.min(closePrices.length, 20);
+      } catch (yahooErr) {
+        // Fallback to Finnhub (current price only)
+        try {
+          const finnhubQuote = await getFinnhubQuote(ticker.toUpperCase());
+          closePrices = [finnhubQuote.c];
+          volumes = [finnhubQuote.v];
+          n = 1;
+        } catch (finnhubErr) {
+          throw new Error("Failed to fetch historical prices from Yahoo and Finnhub");
+        }
+      }
       const recentPrices = closePrices.slice(-n);
-
       // Linear regression
       let sumX = 0,
         sumY = 0,
         sumXY = 0,
         sumX2 = 0;
-
       for (let i = 0; i < n; i++) {
         sumX += i;
         sumY += recentPrices[i];
         sumXY += i * recentPrices[i];
         sumX2 += i * i;
       }
-
-      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-
-      const intercept = (sumY - slope * sumX) / n;
+      const slope = n > 1 ? (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX) : 0;
+      const intercept = n > 0 ? (sumY - slope * sumX) / n : 0;
       const predictedPrice = slope * (n + 5) + intercept;
-
       // Volatility
-      const mean = recentPrices.reduce((a, b) => a + b, 0) / n;
-      const variance =
-        recentPrices.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / n;
+      const mean = n > 0 ? recentPrices.reduce((a, b) => a + b, 0) / n : 0;
+      const variance = n > 0 ? recentPrices.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / n : 0;
       const volatility = Math.sqrt(variance);
-
       // Trend signal
-      const priceChange =
-        ((currentPrice - recentPrices[0]) / recentPrices[0]) * 100;
-
+      const priceChange = n > 0 ? ((currentPrice - recentPrices[0]) / recentPrices[0]) * 100 : 0;
       let signal = "HOLD";
       if (priceChange > 5 && slope > 0) signal = "BUY";
       else if (priceChange < -5 && slope < 0) signal = "SELL";
-
       // Risk
-      const avgVolatility = volatility / currentPrice;
+      const avgVolatility = currentPrice ? volatility / currentPrice : 0;
       let risk = "MEDIUM";
       if (avgVolatility > 0.03) risk = "HIGH";
       else if (avgVolatility < 0.015) risk = "LOW";
-
       // Confidence
-      const trendConsistency =
-        recentPrices.filter((p, i) => {
-          if (i === 0) return true;
-          return slope > 0
-            ? p >= recentPrices[i - 1]
-            : p <= recentPrices[i - 1];
-        }).length / n;
-
-      const confidence = parseFloat(
-        Math.min(trendConsistency * 0.9, 0.85).toFixed(2)
-      );
-
+      const trendConsistency = n > 0 ? recentPrices.filter((p, i) => {
+        if (i === 0) return true;
+        return slope > 0 ? p >= recentPrices[i - 1] : p <= recentPrices[i - 1];
+      }).length / n : 0;
+      const confidence = parseFloat(Math.min(trendConsistency * 0.9, 0.85).toFixed(2));
       // Volume analysis
-      const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
-      const recentVolume = volumes.slice(-5).reduce((a, b) => a + b, 0) / 5;
-
+      const avgVolume = volumes.length > 0 ? volumes.reduce((a, b) => a + b, 0) / volumes.length : 0;
+      const recentVolume = volumes.length >= 5 ? volumes.slice(-5).reduce((a, b) => a + b, 0) / 5 : avgVolume;
       const volumeImpact =
         recentVolume > avgVolume * 1.2
           ? "POSITIVE"
           : recentVolume < avgVolume * 0.8
           ? "NEGATIVE"
           : "NEUTRAL";
-
       const technicalImpact =
         slope > 0 ? "POSITIVE" : slope < 0 ? "NEGATIVE" : "NEUTRAL";
-
       technicalPrediction = {
         predicted_price: parseFloat(predictedPrice.toFixed(2)),
         signal,
